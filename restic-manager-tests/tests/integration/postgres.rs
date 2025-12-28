@@ -3,6 +3,7 @@
 //! These tests require Docker and verify PostgreSQL backup/restore workflows.
 //! Run with: `cargo test -p restic-manager-tests --test integration -- --ignored`
 
+use super::common::ContainerGuard;
 use anyhow::Result;
 use std::process::Command;
 use std::thread;
@@ -37,9 +38,10 @@ fn start_postgres_container(name: &str) -> Result<()> {
     // Wait for PostgreSQL to be ready
     thread::sleep(Duration::from_secs(5));
 
-    // Check if ready
+    // Check if ready by actually executing a query
     for _ in 0..30 {
-        let result = Command::new("docker")
+        // First check if server is accepting connections
+        let ready_result = Command::new("docker")
             .args(&[
                 "exec",
                 name,
@@ -49,8 +51,27 @@ fn start_postgres_container(name: &str) -> Result<()> {
             ])
             .output();
 
-        if result.map(|o| o.status.success()).unwrap_or(false) {
-            return Ok(());
+        if ready_result.map(|o| o.status.success()).unwrap_or(false) {
+            // Server is accepting connections, now verify it can execute queries
+            let query_result = Command::new("docker")
+                .args(&[
+                    "exec",
+                    name,
+                    "psql",
+                    "-U",
+                    "postgres",
+                    "-d",
+                    "testdb",
+                    "-c",
+                    "SELECT 1",
+                ])
+                .output();
+
+            if query_result.map(|o| o.status.success()).unwrap_or(false) {
+                // Add a small buffer to ensure full initialization
+                thread::sleep(Duration::from_millis(500));
+                return Ok(());
+            }
         }
 
         thread::sleep(Duration::from_secs(1));
@@ -59,11 +80,7 @@ fn start_postgres_container(name: &str) -> Result<()> {
     Err(anyhow::anyhow!("PostgreSQL failed to become ready"))
 }
 
-/// Helper to stop and remove container
-fn cleanup_container(name: &str) {
-    let _ = Command::new("docker").args(&["stop", name]).output();
-    let _ = Command::new("docker").args(&["rm", name]).output();
-}
+
 
 /// Helper to execute SQL in container
 fn exec_sql(container: &str, sql: &str) -> Result<String> {
@@ -132,6 +149,7 @@ fn test_postgres_backup_with_docker() {
 
     // Start PostgreSQL
     start_postgres_container(container_name).expect("Failed to start PostgreSQL");
+    let _guard = ContainerGuard::new(container_name.to_string());
 
     // Create test data
     create_test_data(container_name).expect("Failed to create test data");
@@ -146,8 +164,7 @@ fn test_postgres_backup_with_docker() {
     assert!(dump_content.contains("test_table"), "Dump should contain table");
     assert!(dump_content.contains("test1"), "Dump should contain data");
 
-    // Cleanup
-    cleanup_container(container_name);
+    // Cleanup happens automatically via guard
 }
 
 /// Test PostgreSQL backup and restore cycle
@@ -165,6 +182,7 @@ fn test_postgres_backup_restore_cycle() {
 
     // Start PostgreSQL
     start_postgres_container(container_name).expect("Failed to start PostgreSQL");
+    let _guard = ContainerGuard::new(container_name.to_string());
 
     // Create test data
     create_test_data(container_name).expect("Failed to create test data");
@@ -184,30 +202,44 @@ fn test_postgres_backup_restore_cycle() {
 
     // Restore from dump
     let dump_content = std::fs::read_to_string(&dump_path).expect("Failed to read dump");
-    let output = Command::new("docker")
-        .args(&[
-            "exec",
-            "-i",
-            container_name,
-            "psql",
-            "-U",
-            "postgres",
-            "-d",
-            "testdb",
-        ])
-        .arg("-c")
-        .arg(&dump_content)
-        .output()
-        .expect("Failed to restore database");
-
+    let mut cmd = Command::new("docker");
+    cmd.args(&[
+        "exec",
+        "-i",
+        container_name,
+        "psql",
+        "-U",
+        "postgres",
+        "-d",
+        "testdb",
+    ]);
+    
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    
+    let mut child = cmd.spawn().expect("Failed to spawn psql restore");
+    
+    // Write dump content to stdin
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        stdin.write_all(dump_content.as_bytes()).expect("Failed to write to stdin");
+    }
+    
+    let output = child.wait_with_output().expect("Failed to wait for restore");
+    
+    if !output.status.success() {
+        eprintln!("Restore stderr: {}", String::from_utf8_lossy(&output.stderr));
+        eprintln!("Restore stdout: {}", String::from_utf8_lossy(&output.stdout));
+    }
     assert!(output.status.success(), "Restore should succeed");
 
     // Verify data is restored
     let restored_count = verify_test_data(container_name).expect("Failed to verify restored data");
     assert_eq!(restored_count, 3, "Should have 3 rows after restore");
 
-    // Cleanup
-    cleanup_container(container_name);
+    // Cleanup happens automatically via guard
 }
 
 /// Test PostgreSQL incremental backup
@@ -224,6 +256,7 @@ fn test_postgres_incremental_backup() {
 
     // Start PostgreSQL
     start_postgres_container(container_name).expect("Failed to start PostgreSQL");
+    let _guard = ContainerGuard::new(container_name.to_string());
 
     // Create initial data
     create_test_data(container_name).expect("Failed to create test data");
@@ -257,6 +290,5 @@ fn test_postgres_incremental_backup() {
     assert!(dump2_content.contains("test4"), "Second dump should have test4");
     assert!(dump2_content.contains("test5"), "Second dump should have test5");
 
-    // Cleanup
-    cleanup_container(container_name);
+    // Cleanup happens automatically via guard
 }

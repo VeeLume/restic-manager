@@ -11,15 +11,18 @@
 //!
 //! ## Example Usage
 //!
-//! ```ignore
+//! ```no_run
 //! use restic_manager::config;
 //!
+//! # fn main() -> anyhow::Result<()> {
 //! let config = config::load_config("backup-config.toml")?;
 //! let resolved_services = config::resolve_all_services(&config)?;
 //!
 //! for (name, service) in resolved_services {
 //!     println!("Service: {}, Targets: {:?}", name, service.targets);
 //! }
+//! # Ok(())
+//! # }
 //! ```
 
 mod loader;

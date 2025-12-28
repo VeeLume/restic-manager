@@ -80,18 +80,7 @@ pub fn init_repository(env: &ResticEnv, timeout: Duration) -> Result<()> {
         cmd.env(key, value);
     }
 
-    let output = tokio::runtime::Handle::current().block_on(async {
-        let result = tokio::time::timeout(
-            timeout,
-            tokio::process::Command::from(cmd).output(),
-        )
-        .await;
-
-        match result {
-            Ok(output) => output.context("Failed to execute restic init"),
-            Err(_) => Err(anyhow::anyhow!("Repository initialization timed out")),
-        }
-    })?;
+    let output = execute_with_timeout(cmd, timeout, "Failed to execute restic init")?;
 
     // Repository might already exist - that's okay
     if output.status.success() {
@@ -147,18 +136,7 @@ pub fn backup(
         cmd.env(key, value);
     }
 
-    let output = tokio::runtime::Handle::current().block_on(async {
-        let result = tokio::time::timeout(
-            timeout,
-            tokio::process::Command::from(cmd).output(),
-        )
-        .await;
-
-        match result {
-            Ok(output) => output.context("Failed to execute restic backup"),
-            Err(_) => Err(anyhow::anyhow!("Backup timed out")),
-        }
-    })?;
+    let output = execute_with_timeout(cmd, timeout, "Failed to execute restic backup")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -207,18 +185,7 @@ pub fn apply_retention(
         cmd.env(key, value);
     }
 
-    let output = tokio::runtime::Handle::current().block_on(async {
-        let result = tokio::time::timeout(
-            timeout,
-            tokio::process::Command::from(cmd).output(),
-        )
-        .await;
-
-        match result {
-            Ok(output) => output.context("Failed to execute restic forget"),
-            Err(_) => Err(anyhow::anyhow!("Retention policy application timed out")),
-        }
-    })?;
+    let output = execute_with_timeout(cmd, timeout, "Failed to execute restic forget")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -241,18 +208,7 @@ pub fn unlock_repository(env: &ResticEnv, timeout: Duration) -> Result<()> {
         cmd.env(key, value);
     }
 
-    let output = tokio::runtime::Handle::current().block_on(async {
-        let result = tokio::time::timeout(
-            timeout,
-            tokio::process::Command::from(cmd).output(),
-        )
-        .await;
-
-        match result {
-            Ok(output) => output.context("Failed to execute restic unlock"),
-            Err(_) => Err(anyhow::anyhow!("Unlock timed out")),
-        }
-    })?;
+    let output = execute_with_timeout(cmd, timeout, "Failed to execute restic unlock")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -306,18 +262,7 @@ pub fn list_snapshots(env: &ResticEnv, timeout: Duration) -> Result<Vec<Snapshot
         cmd.env(key, value);
     }
 
-    let output = tokio::runtime::Handle::current().block_on(async {
-        let result = tokio::time::timeout(
-            timeout,
-            tokio::process::Command::from(cmd).output(),
-        )
-        .await;
-
-        match result {
-            Ok(output) => output.context("Failed to execute restic snapshots"),
-            Err(_) => Err(anyhow::anyhow!("Listing snapshots timed out")),
-        }
-    })?;
+    let output = execute_with_timeout(cmd, timeout, "Failed to execute restic snapshots")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -374,18 +319,7 @@ pub fn get_stats(env: &ResticEnv, timeout: Duration) -> Result<String> {
         cmd.env(key, value);
     }
 
-    let output = tokio::runtime::Handle::current().block_on(async {
-        let result = tokio::time::timeout(
-            timeout,
-            tokio::process::Command::from(cmd).output(),
-        )
-        .await;
-
-        match result {
-            Ok(output) => output.context("Failed to execute restic stats"),
-            Err(_) => Err(anyhow::anyhow!("Getting stats timed out")),
-        }
-    })?;
+    let output = execute_with_timeout(cmd, timeout, "Failed to execute restic stats")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -423,18 +357,7 @@ pub fn check_repository(env: &ResticEnv, read_data: bool, timeout: Duration) -> 
         cmd.env(key, value);
     }
 
-    let output = tokio::runtime::Handle::current().block_on(async {
-        let result = tokio::time::timeout(
-            timeout,
-            tokio::process::Command::from(cmd).output(),
-        )
-        .await;
-
-        match result {
-            Ok(output) => output.context("Failed to execute restic check"),
-            Err(_) => Err(anyhow::anyhow!("Repository check timed out")),
-        }
-    })?;
+    let output = execute_with_timeout(cmd, timeout, "Failed to execute restic check")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -493,18 +416,7 @@ pub fn restore_snapshot(
         cmd.env(key, value);
     }
 
-    let output = tokio::runtime::Handle::current().block_on(async {
-        let result = tokio::time::timeout(
-            timeout,
-            tokio::process::Command::from(cmd).output(),
-        )
-        .await;
-
-        match result {
-            Ok(output) => output.context("Failed to execute restic restore"),
-            Err(_) => Err(anyhow::anyhow!("Restore timed out")),
-        }
-    })?;
+    let output = execute_with_timeout(cmd, timeout, "Failed to execute restic restore")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -536,18 +448,7 @@ pub fn list_snapshot_files(
         cmd.env(key, value);
     }
 
-    let output = tokio::runtime::Handle::current().block_on(async {
-        let result = tokio::time::timeout(
-            timeout,
-            tokio::process::Command::from(cmd).output(),
-        )
-        .await;
-
-        match result {
-            Ok(output) => output.context("Failed to execute restic ls"),
-            Err(_) => Err(anyhow::anyhow!("Listing files timed out")),
-        }
-    })?;
+    let output = execute_with_timeout(cmd, timeout, "Failed to execute restic ls")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

@@ -3,6 +3,7 @@
 //! These tests require Docker and verify volume backup/restore workflows.
 //! Run with: `cargo test -p restic-manager-tests --test integration -- --ignored`
 
+use super::common::VolumeGuard;
 use anyhow::Result;
 use restic_manager::utils::docker::{
     archive_volume, get_volume_size, list_volumes, restore_volume, volume_exists,
@@ -82,6 +83,7 @@ fn test_list_docker_volumes() {
 
     // Create test volume
     create_test_volume(test_volume, "test").expect("Failed to create test volume");
+    let _guard = VolumeGuard::new(test_volume.to_string());
 
     // List volumes
     let volumes = list_volumes(timeout).expect("Failed to list volumes");
@@ -92,8 +94,7 @@ fn test_list_docker_volumes() {
         "Test volume not found in list"
     );
 
-    // Cleanup
-    cleanup_volume(test_volume);
+    // Cleanup happens automatically via guard
 }
 
 /// Test volume archive and restore
@@ -113,6 +114,7 @@ fn test_volume_archive_restore() {
 
     // Create volume with test data
     create_test_volume(test_volume, test_content).expect("Failed to create test volume");
+    let _guard = VolumeGuard::new(test_volume.to_string());
 
     // Archive the volume
     archive_volume(test_volume, &archive_path, timeout).expect("Failed to archive volume");
@@ -147,8 +149,7 @@ fn test_volume_archive_restore() {
         "Restored data should match original"
     );
 
-    // Cleanup
-    cleanup_volume(test_volume);
+    // Cleanup happens automatically via guard
 }
 
 /// Test archiving multiple volumes (Appwrite scenario)
@@ -169,9 +170,11 @@ fn test_archive_multiple_volumes() {
         ("restic-test-vol3", "data3"),
     ];
 
-    // Create volumes
+    // Create volumes with guards for automatic cleanup
+    let mut guards = Vec::new();
     for (name, content) in &volumes {
         create_test_volume(name, content).expect("Failed to create volume");
+        guards.push(VolumeGuard::new(name.to_string()));
     }
 
     // Archive each volume
@@ -186,10 +189,7 @@ fn test_archive_multiple_volumes() {
     // Verify all archives exist and have different sizes (different content)
     assert_eq!(archives.len(), 3, "Should have 3 archives");
 
-    // Cleanup
-    for (name, _) in &volumes {
-        cleanup_volume(name);
-    }
+    // Cleanup happens automatically via guards
 }
 
 /// Test volume size calculation
@@ -206,6 +206,7 @@ fn test_get_volume_size() {
 
     // Create volume
     create_test_volume(test_volume, "test").expect("Failed to create volume");
+    let _guard = VolumeGuard::new(test_volume.to_string());
 
     // Add a file with known size (1KB)
     Command::new("docker")
@@ -230,8 +231,7 @@ fn test_get_volume_size() {
     // Volume should be at least 1KB (plus filesystem overhead)
     assert!(size >= 1024, "Volume size should be at least 1KB");
 
-    // Cleanup
-    cleanup_volume(test_volume);
+    // Cleanup happens automatically via guard
 }
 
 /// Test exact volume name matching (critical for Appwrite)
@@ -250,6 +250,7 @@ fn test_exact_volume_name_matching() {
     let prefix_name = "appwrite";
 
     create_test_volume(exact_name, "exact").expect("Failed to create exact volume");
+    let _guard = VolumeGuard::new(exact_name.to_string());
 
     // Test exact match
     let exists = volume_exists(exact_name, timeout).expect("Failed to check exact volume");
@@ -262,6 +263,5 @@ fn test_exact_volume_name_matching() {
         "Prefix-only name should not match longer volume name"
     );
 
-    // Cleanup
-    cleanup_volume(exact_name);
+    // Cleanup happens automatically via guard
 }

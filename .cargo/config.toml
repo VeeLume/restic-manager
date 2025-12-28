@@ -1,0 +1,18 @@
+# Cross-compilation configuration for restic-manager
+# Enables building Linux binaries from Windows/macOS
+
+[target.x86_64-unknown-linux-musl]
+# cargo-zigbuild handles this automatically when using `cargo zigbuild`
+# No explicit linker configuration needed
+
+[target.aarch64-unknown-linux-musl]
+# ARM64 Linux support (e.g., Raspberry Pi, ARM servers)
+# Also handled by cargo-zigbuild
+
+[build]
+# Uncomment to set default target for this project
+# target = "x86_64-unknown-linux-musl"
+
+[env]
+# Ensure rustls is used instead of OpenSSL (already configured in Cargo.toml)
+# This avoids cross-compilation issues with native TLS libraries

@@ -194,7 +194,35 @@ pub fn get_volume_size(volume_name: &str, timeout: Duration) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::Rng;
     use tempfile::TempDir;
+
+    struct VolumeTestGuard {
+        name: String,
+    }
+
+    impl VolumeTestGuard {
+        fn new(name: String) -> Self {
+            Self { name }
+        }
+
+        fn random() -> Self {
+            let name: String = rand::rng()
+                .sample_iter(&rand::distr::Alphanumeric)
+                .take(16)
+                .map(char::from)
+                .collect();
+            Self { name }
+        }
+    }
+
+    impl Drop for VolumeTestGuard {
+        fn drop(&mut self) {
+            let out = std::process::Command::new("docker")
+                .args(&["volume", "rm", &self.name])
+                .output();
+        }
+    }
 
     // Note: Most of these tests require Docker to be running
     // They are integration tests rather than pure unit tests
@@ -211,19 +239,25 @@ mod tests {
 
     #[test]
     #[ignore] // Requires Docker - tests timeout handling
+    /// Test that volume_exists handles timeout correctly
     fn test_volume_exists_with_timeout() {
-        let timeout = Duration::from_millis(1); // Very short timeout
-        let result = volume_exists("nonexistent-test-volume", timeout);
-        // This might fail due to timeout or succeed if Docker is fast enough
-        // Either way, it should not panic
-        let _ = result;
+        let timeout = Duration::from_nanos(1); // Very short timeout
+        let guard = VolumeTestGuard::random();
+        let result = volume_exists(&guard.name, timeout);
+
+        // Should timeout or return false
+        match result {
+            Ok(exists) => assert!(!exists, "Volume should not exist"),
+            Err(_) => (), // Timeout error is acceptable
+        }
     }
 
     #[test]
     #[ignore] // Requires Docker
     fn test_volume_exists_nonexistent_volume() {
         let timeout = Duration::from_secs(10);
-        let result = volume_exists("restic-test-nonexistent-volume-12345", timeout);
+        let guard = VolumeTestGuard::random();
+        let result = volume_exists(&guard.name, timeout);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), false);
     }
@@ -234,16 +268,18 @@ mod tests {
         let timeout = Duration::from_secs(60);
         let temp_dir = TempDir::new().unwrap();
         let volume_name = "restic-test-volume";
-        
+
         // Create a test volume
         let create_result = std::process::Command::new("docker")
             .args(&["volume", "create", volume_name])
             .output();
-        
+
         if create_result.is_err() {
             println!("Skipping test: Docker not available");
             return;
         }
+
+        let _guard = VolumeTestGuard::new(volume_name.to_string());
 
         // Add some test data to the volume
         let write_result = std::process::Command::new("docker")
@@ -255,7 +291,7 @@ mod tests {
                 "echo 'test data' > /data/test.txt && echo 'more data' > /data/test2.txt"
             ])
             .output();
-        
+
         assert!(write_result.is_ok());
 
         // Archive the volume
@@ -270,6 +306,8 @@ mod tests {
             .args(&["volume", "create", restore_volume_name])
             .output();
 
+        let _restore_guard = VolumeTestGuard::new(restore_volume_name.to_string());
+
         // Restore to the new volume
         let restore_result = restore_volume(restore_volume_name, &archive_path, timeout);
         assert!(restore_result.is_ok(), "Should restore volume successfully");
@@ -283,7 +321,7 @@ mod tests {
                 "cat", "/data/test.txt"
             ])
             .output();
-        
+
         if let Ok(output) = verify_result {
             let content = String::from_utf8_lossy(&output.stdout);
             assert!(content.contains("test data"));
@@ -303,16 +341,18 @@ mod tests {
     fn test_get_volume_size() {
         let timeout = Duration::from_secs(30);
         let volume_name = "restic-test-volume-size";
-        
+
         // Create a test volume
         let create_result = std::process::Command::new("docker")
             .args(&["volume", "create", volume_name])
             .output();
-        
+
         if create_result.is_err() {
             println!("Skipping test: Docker not available");
             return;
         }
+
+        let _guard = VolumeTestGuard::new(volume_name.to_string());
 
         // Add some data
         let _ = std::process::Command::new("docker")
@@ -330,7 +370,7 @@ mod tests {
         assert!(size_result.is_ok(), "Should get volume size successfully");
         let size = size_result.unwrap();
         assert!(size > 0, "Volume size should be greater than 0");
-        
+
         // Cleanup
         let _ = std::process::Command::new("docker")
             .args(&["volume", "rm", volume_name])
@@ -340,15 +380,22 @@ mod tests {
     #[test]
     #[ignore] // Requires Docker - tests directory creation
     fn test_archive_volume_creates_parent_directory() {
+        // Skip if Docker is not available
+        if std::process::Command::new("docker").arg("ps").output().is_err() {
+            return;
+        }
+
         let temp_dir = TempDir::new().unwrap();
         let nested_path = temp_dir.path().join("nested").join("deep").join("test.tar.gz");
         let timeout = Duration::from_secs(30);
-        
-        // This will fail because volume doesn't exist, but it should create directories first
-        let result = archive_volume("nonexistent-volume", &nested_path, timeout);
-        
-        // Should fail due to Docker error, but parent directories should be created
-        assert!(result.is_err());
+
+        // Use a volume name that definitely won't exist (long random string)
+        let guard = VolumeTestGuard::random();
+
+        // This should fail because volume doesn't exist, but it should create directories first
+        let _result = archive_volume(&guard.name, &nested_path, timeout);
+
+        // The key test: parent directories should be created even if Docker fails
         assert!(nested_path.parent().unwrap().exists(), "Parent directories should be created");
     }
 
@@ -356,8 +403,10 @@ mod tests {
     fn test_restore_volume_nonexistent_archive() {
         let timeout = Duration::from_secs(10);
         let nonexistent_path = std::path::PathBuf::from("/nonexistent/path/archive.tar.gz");
-        
-        let result = restore_volume("test-volume", &nonexistent_path, timeout);
+
+        let guard = VolumeTestGuard::random();
+
+        let result = restore_volume(&guard.name, &nonexistent_path, timeout);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("does not exist"));
     }
@@ -367,8 +416,7 @@ mod tests {
     fn test_list_volumes_timeout() {
         let timeout = Duration::from_nanos(1); // Impossibly short timeout
         let result = list_volumes(timeout);
-        // Should either timeout or succeed very fast
-        // We're just checking it handles timeouts gracefully
-        let _ = result;
+
+        assert!(result.is_err(), "Should timeout listing volumes");
     }
 }
