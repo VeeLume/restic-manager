@@ -11,7 +11,14 @@
       "Bash(target/release/restic-manager.exe status:*)",
       "Bash(target/release/restic-manager.exe verify:*)",
       "Bash(target/release/restic-manager.exe restore:*)",
-      "WebFetch(domain:docs.immich.app)"
+      "WebFetch(domain:docs.immich.app)",
+      "Bash(target/release/restic-manager.exe restic-version:*)",
+      "Bash(target/release/restic-manager.exe:*)",
+      "mcp__plugin_serena_serena",
+      "mcp__context7",
+      "WebFetch(domain:discord.com)",
+      "WebSearch",
+      "WebFetch(domain:gist.github.com)"
     ]
   }
 }

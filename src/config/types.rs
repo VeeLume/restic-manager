@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Root configuration structure
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     pub global: GlobalConfig,
     pub destinations: HashMap<String, Destination>,
@@ -15,7 +15,7 @@ pub struct Config {
 }
 
 /// Global configuration settings
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GlobalConfig {
     /// Path to restic password file
     pub restic_password_file: PathBuf,
@@ -59,7 +59,7 @@ pub struct GlobalConfig {
 }
 
 /// Backup destination configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Destination {
     #[serde(rename = "type")]
     pub dest_type: DestinationType,
@@ -68,7 +68,7 @@ pub struct Destination {
     pub description: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DestinationType {
     Sftp,
@@ -78,7 +78,7 @@ pub enum DestinationType {
 }
 
 /// Notification configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NotificationConfig {
     #[serde(default)]
     pub discord_webhook_url: String,
@@ -114,7 +114,7 @@ pub enum NotifyEvent {
 }
 
 /// Profile for grouping common service settings
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Profile {
     #[serde(default)]
     pub targets: Vec<String>,
@@ -136,7 +136,7 @@ pub struct Profile {
 }
 
 /// Service configuration (raw, before profile merging)
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServiceConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
@@ -154,14 +154,6 @@ pub struct ServiceConfig {
     /// Backup targets (destination names)
     #[serde(default)]
     pub targets: Vec<String>,
-
-    /// Backup strategy (generic, appwrite, immich, etc.)
-    #[serde(default)]
-    pub strategy: Option<String>,
-
-    /// Legacy: path to backup script
-    #[serde(default)]
-    pub backup_script: Option<PathBuf>,
 
     /// Timeout override
     #[serde(default)]
@@ -181,9 +173,9 @@ pub struct ServiceConfig {
     #[serde(default)]
     pub notify_on: Vec<NotifyEvent>,
 
-    /// Strategy-specific configuration
+    /// Backup configuration (paths, volumes, hooks)
     #[serde(default)]
-    pub config: Option<ServiceStrategyConfig>,
+    pub config: Option<BackupConfig>,
 }
 
 /// Resolved service configuration (after profile merging)
@@ -194,19 +186,11 @@ pub struct ResolvedServiceConfig {
     pub description: String,
     pub schedule: String,
     pub targets: Vec<String>,
-    pub strategy: BackupStrategy,
     pub timeout_seconds: u64,
     pub retention: RetentionPolicy,
+    #[allow(dead_code)]
     pub notify_on: Vec<NotifyEvent>,
-    pub config: Option<ServiceStrategyConfig>,
-}
-
-#[derive(Debug, Clone)]
-pub enum BackupStrategy {
-    Generic,
-    Appwrite,
-    Immich,
-    Script(PathBuf),
+    pub config: Option<BackupConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -218,7 +202,7 @@ pub struct RetentionPolicy {
 }
 
 /// Hook to run before or after backup
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Hook {
     /// Name/description of the hook
     #[serde(default)]
@@ -244,44 +228,28 @@ fn default_continue_on_error() -> bool {
     false
 }
 
-/// Strategy-specific configuration (generic, appwrite, immich)
-#[derive(Debug, Clone, Deserialize)]
-pub struct ServiceStrategyConfig {
-    // Generic strategy fields
+/// Backup configuration (paths, volumes, hooks)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BackupConfig {
+    /// File/directory paths to backup (relative to docker_base or absolute)
     #[serde(default)]
     pub paths: Vec<String>,
+
+    /// Docker volumes to backup
     #[serde(default)]
     pub volumes: Vec<String>,
+
+    /// Exclusion patterns
     #[serde(default)]
     pub excludes: Vec<String>,
 
-    // Hooks (for generic strategy)
+    /// Hooks to run before backup
     #[serde(default)]
     pub pre_backup_hooks: Vec<Hook>,
+
+    /// Hooks to run after backup
     #[serde(default)]
     pub post_backup_hooks: Vec<Hook>,
-
-    // Appwrite strategy fields
-    #[serde(default)]
-    pub mariadb_container: Option<String>,
-    #[serde(default)]
-    pub mariadb_database: Option<String>,
-    #[serde(default)]
-    pub mariadb_user: Option<String>,
-
-    // Immich strategy fields
-    #[serde(default)]
-    pub postgres_container: Option<String>,
-    #[serde(default)]
-    pub postgres_database: Option<String>,
-    #[serde(default)]
-    pub postgres_user: Option<String>,
-    #[serde(default)]
-    pub library_path: Option<PathBuf>,
-    #[serde(default)]
-    pub database_repo_suffix: Option<String>,
-    #[serde(default)]
-    pub library_repo_suffix: Option<String>,
 }
 
 // Default value functions

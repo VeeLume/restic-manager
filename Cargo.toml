@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "restic-manager-tests"]
+resolver = "2"
+
 [package]
 name = "restic-manager"
 version = "0.1.0"
@@ -27,8 +31,8 @@ clap = { version = "4.5", features = ["derive", "cargo"] }
 # Async runtime (for concurrent operations and HTTP)
 tokio = { version = "1.35", features = ["full"] }
 
-# HTTP client (for Discord webhooks)
-reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+# HTTP client (for Discord webhooks and restic downloads)
+reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
 
 # Logging
 tracing = "0.1"
@@ -52,3 +56,10 @@ dialoguer = "0.11"
 tempfile = "3.8"
 assert_cmd = "2.0"
 predicates = "3.0"
+# Docker testing
+testcontainers = "0.15"
+testcontainers-modules = { version = "0.3", features = ["postgres", "mysql"] }
+# Test utilities
+rstest = "0.18"
+serial_test = "3.0"
+mockall = "0.12"

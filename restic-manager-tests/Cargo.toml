@@ -1,0 +1,58 @@
+[package]
+name = "restic-manager-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Test suite for restic-manager"
+
+[lib]
+name = "test_utils"
+path = "src/lib.rs"
+
+# Unit tests
+[[test]]
+name = "unit"
+path = "tests/unit/mod.rs"
+
+# Command tests (mocked)
+[[test]]
+name = "commands"
+path = "tests/commands/mod.rs"
+
+# Integration tests (Docker required)
+[[test]]
+name = "integration"
+path = "tests/integration/mod.rs"
+
+[dependencies]
+# The main crate
+restic-manager = { path = ".." }
+
+# Error handling
+anyhow = "1.0"
+
+# Temporary files/directories
+tempfile = "3.8"
+
+# Serialization for test configs
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# Sync primitives for mocks
+parking_lot = "0.12"
+
+[dev-dependencies]
+# Docker testing
+testcontainers = "0.15"
+testcontainers-modules = { version = "0.3", features = ["postgres", "mysql"] }
+
+# Test utilities
+rstest = "0.18"
+serial_test = "3.0"
+
+# CLI testing
+assert_cmd = "2.0"
+predicates = "3.0"
+
+# Async runtime for integration tests
+tokio = { version = "1.35", features = ["full"] }

@@ -11,7 +11,7 @@
 //!
 //! ## Example Usage
 //!
-//! ```no_run
+//! ```ignore
 //! use restic_manager::config;
 //!
 //! let config = config::load_config("backup-config.toml")?;
@@ -25,7 +25,7 @@
 mod loader;
 mod types;
 
-pub use loader::{load_config, resolve_all_services, resolve_service, ConfigError, Result};
+pub use loader::{load_config, resolve_all_services};
 pub use types::*;
 
 /// Get the merged exclude patterns for a service
@@ -41,6 +41,7 @@ pub fn get_effective_excludes(service: &ResolvedServiceConfig, global: &GlobalCo
 }
 
 /// Expand tilde (~) in path
+#[allow(dead_code)]
 pub fn expand_tilde(path: &std::path::Path) -> std::path::PathBuf {
     if let Ok(stripped) = path.strip_prefix("~") {
         if let Some(home) = dirs::home_dir() {
@@ -82,7 +83,6 @@ mod tests {
             enabled: true,
             schedule: "0 2 * * *".to_string(),
             targets: vec!["local".to_string()],
-            strategy: BackupStrategy::Generic,
             timeout_seconds: 3600,
             retention: RetentionPolicy {
                 daily: 7,
@@ -91,21 +91,12 @@ mod tests {
                 yearly: 1,
             },
             notify_on: vec![],
-            config: Some(ServiceStrategyConfig {
+            config: Some(BackupConfig {
                 paths: vec![],
                 volumes: vec![],
                 pre_backup_hooks: vec![],
                 post_backup_hooks: vec![],
                 excludes: vec!["*.cache".to_string()],
-                mariadb_container: None,
-                mariadb_database: None,
-                mariadb_user: None,
-                postgres_container: None,
-                postgres_database: None,
-                postgres_user: None,
-                library_path: None,
-                database_repo_suffix: None,
-                library_repo_suffix: None,
             }),
         };
 

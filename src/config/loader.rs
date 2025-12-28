@@ -19,9 +19,6 @@ pub enum ConfigError {
 
     #[error("Destination '{0}' not found")]
     DestinationNotFound(String),
-
-    #[error("Service '{0}' has no strategy or backup_script defined")]
-    NoStrategyDefined(String),
 }
 
 pub type Result<T> = std::result::Result<T, ConfigError>;
@@ -72,11 +69,6 @@ fn validate_service(name: &str, service: &ServiceConfig, config: &Config) -> Res
         if !config.profiles.contains_key(profile_name) {
             return Err(ConfigError::ProfileNotFound(profile_name.clone()));
         }
-    }
-
-    // Check that service has either a strategy or backup_script
-    if service.strategy.is_none() && service.backup_script.is_none() {
-        return Err(ConfigError::NoStrategyDefined(name.to_string()));
     }
 
     // Validate that targets exist (either from service or will be inherited from profile)
@@ -176,32 +168,12 @@ pub fn resolve_service(
         config.notifications.notify_on.clone()
     };
 
-    // Resolve strategy
-    let strategy = if let Some(ref script_path) = service.backup_script {
-        BackupStrategy::Script(script_path.clone())
-    } else if let Some(ref strategy_name) = service.strategy {
-        match strategy_name.as_str() {
-            "generic" => BackupStrategy::Generic,
-            "appwrite" => BackupStrategy::Appwrite,
-            "immich" => BackupStrategy::Immich,
-            _ => {
-                return Err(ConfigError::ValidationError(format!(
-                    "Unknown strategy: {}",
-                    strategy_name
-                )))
-            }
-        }
-    } else {
-        return Err(ConfigError::NoStrategyDefined(name.to_string()));
-    };
-
     Ok(ResolvedServiceConfig {
         name: name.to_string(),
         enabled: service.enabled,
         description: service.description.clone(),
         schedule: service.schedule.clone(),
         targets,
-        strategy,
         timeout_seconds,
         retention,
         notify_on,

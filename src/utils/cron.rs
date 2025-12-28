@@ -1,4 +1,8 @@
 //! Cron job management utilities
+//!
+//! These utilities are prepared for future cron job management functionality.
+
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use std::env;

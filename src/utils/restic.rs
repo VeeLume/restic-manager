@@ -5,10 +5,26 @@ use crate::config::{Destination, RetentionPolicy};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::{mpsc, OnceLock};
+use std::thread;
 use std::time::Duration;
 use tracing::{info, warn};
 
-use std::sync::OnceLock;
+/// Execute a command with timeout using thread-based implementation
+fn execute_with_timeout(mut cmd: Command, timeout: Duration, error_msg: &str) -> Result<Output> {
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let result = cmd.output();
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result.context(error_msg.to_string()),
+        Err(_) => anyhow::bail!("Command timed out after {:?}", timeout),
+    }
+}
 
 /// Global flag for using system restic
 static USE_SYSTEM_RESTIC: OnceLock<bool> = OnceLock::new();
@@ -42,6 +58,7 @@ impl ResticEnv {
     }
 
     /// Add custom environment variable
+    #[allow(dead_code)]
     pub fn add(&mut self, key: String, value: String) {
         self.vars.insert(key, value);
     }
@@ -272,6 +289,7 @@ pub struct Snapshot {
     pub short_id: String,
     pub time: String,
     pub hostname: String,
+    #[allow(dead_code)]
     pub paths: Vec<String>,
 }
 
@@ -545,6 +563,8 @@ pub fn list_snapshot_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+    use std::fs;
 
     #[test]
     fn test_build_repository_url_with_trailing_slash() {
@@ -580,5 +600,184 @@ mod tests {
 
         let url = build_repository_url(&destination, "postgres", Some("-prod"));
         assert_eq!(url, "/tmp/backups/postgres-prod");
+    }
+
+    #[test]
+    fn test_build_repository_url_multiple_slashes() {
+        let destination = Destination {
+            dest_type: crate::config::DestinationType::Local,
+            url: "/tmp/backups///".to_string(),
+            description: "Test destination".to_string(),
+        };
+
+        let url = build_repository_url(&destination, "postgres", None);
+        // Should handle multiple trailing slashes gracefully
+        assert_eq!(url, "/tmp/backups///postgres");
+    }
+
+    #[test]
+    fn test_restic_env_creation() {
+        let temp_dir = TempDir::new().unwrap();
+        let password_file = temp_dir.path().join("password.txt");
+        fs::write(&password_file, "test-password").unwrap();
+
+        let env = ResticEnv::new(&password_file, "sftp://user@host/backups");
+
+        assert_eq!(env.vars().len(), 2);
+        assert!(env.vars().contains_key("RESTIC_PASSWORD_FILE"));
+        assert!(env.vars().contains_key("RESTIC_REPOSITORY"));
+        assert_eq!(
+            env.vars().get("RESTIC_REPOSITORY").unwrap(),
+            "sftp://user@host/backups"
+        );
+    }
+
+    #[test]
+    fn test_restic_env_add_custom_var() {
+        let temp_dir = TempDir::new().unwrap();
+        let password_file = temp_dir.path().join("password.txt");
+        fs::write(&password_file, "test-password").unwrap();
+
+        let mut env = ResticEnv::new(&password_file, "/tmp/repo");
+        env.add("CUSTOM_VAR".to_string(), "custom_value".to_string());
+
+        assert_eq!(env.vars().len(), 3);
+        assert_eq!(env.vars().get("CUSTOM_VAR").unwrap(), "custom_value");
+    }
+
+    #[test]
+    fn test_restic_env_overwrite_var() {
+        let temp_dir = TempDir::new().unwrap();
+        let password_file = temp_dir.path().join("password.txt");
+        fs::write(&password_file, "test-password").unwrap();
+
+        let mut env = ResticEnv::new(&password_file, "/tmp/repo");
+        env.add("RESTIC_REPOSITORY".to_string(), "/tmp/new-repo".to_string());
+
+        // Should overwrite existing value
+        assert_eq!(env.vars().get("RESTIC_REPOSITORY").unwrap(), "/tmp/new-repo");
+    }
+
+    #[test]
+    fn test_snapshot_struct_creation() {
+        let snapshot = Snapshot {
+            id: "abc123def456".to_string(),
+            short_id: "abc123".to_string(),
+            time: "2025-12-28T10:30:00Z".to_string(),
+            hostname: "testhost".to_string(),
+            paths: vec!["/data".to_string(), "/home".to_string()],
+        };
+
+        assert_eq!(snapshot.id, "abc123def456");
+        assert_eq!(snapshot.paths.len(), 2);
+    }
+
+    #[test]
+    fn test_use_system_restic_flag() {
+        // Test default behavior
+        set_use_system_restic(false);
+        let binary = get_restic_binary();
+        assert!(!binary.is_empty());
+
+        // Note: We can't test set_use_system_restic(true) multiple times
+        // because OnceLock can only be set once
+    }
+
+    #[test]
+    #[ignore] // Requires restic installed
+    fn test_init_repository_local() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path().join("test-repo");
+        let password_file = temp_dir.path().join("password.txt");
+        
+        fs::write(&password_file, "test-password-123").unwrap();
+
+        let env = ResticEnv::new(&password_file, repo_path.to_str().unwrap());
+        let timeout = Duration::from_secs(30);
+
+        let result = init_repository(&env, timeout);
+        assert!(result.is_ok(), "Should initialize repository successfully");
+
+        // Try initializing again - should succeed (already exists)
+        let result2 = init_repository(&env, timeout);
+        assert!(result2.is_ok(), "Should handle already initialized repository");
+    }
+
+    #[test]
+    #[ignore] // Requires restic installed
+    fn test_backup_empty_paths() {
+        let temp_dir = TempDir::new().unwrap();
+        let password_file = temp_dir.path().join("password.txt");
+        
+        fs::write(&password_file, "test-password").unwrap();
+
+        let env = ResticEnv::new(&password_file, "/tmp/test-repo");
+        let timeout = Duration::from_secs(10);
+        let paths: Vec<PathBuf> = vec![];
+        let excludes: Vec<String> = vec![];
+
+        // Should handle empty paths gracefully
+        let result = backup(&env, &paths, &excludes, timeout);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    #[ignore] // Requires restic installed
+    fn test_list_snapshots_empty_repo() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path().join("test-repo");
+        let password_file = temp_dir.path().join("password.txt");
+        
+        fs::write(&password_file, "test-password").unwrap();
+
+        let env = ResticEnv::new(&password_file, repo_path.to_str().unwrap());
+        let timeout = Duration::from_secs(30);
+
+        // Initialize repository
+        let _ = init_repository(&env, timeout);
+
+        // List snapshots from empty repo
+        let result = list_snapshots(&env, timeout);
+        assert!(result.is_ok());
+        let snapshots = result.unwrap();
+        assert_eq!(snapshots.len(), 0);
+    }
+
+    #[test]
+    #[ignore] // Requires restic installed
+    fn test_get_latest_snapshot_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path().join("test-repo");
+        let password_file = temp_dir.path().join("password.txt");
+        
+        fs::write(&password_file, "test-password").unwrap();
+
+        let env = ResticEnv::new(&password_file, repo_path.to_str().unwrap());
+        let timeout = Duration::from_secs(30);
+
+        let _ = init_repository(&env, timeout);
+
+        let result = get_latest_snapshot(&env, timeout);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    #[ignore] // Requires restic installed
+    fn test_count_snapshots_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path().join("test-repo");
+        let password_file = temp_dir.path().join("password.txt");
+        
+        fs::write(&password_file, "test-password").unwrap();
+
+        let env = ResticEnv::new(&password_file, repo_path.to_str().unwrap());
+        let timeout = Duration::from_secs(30);
+
+        let _ = init_repository(&env, timeout);
+
+        let result = count_snapshots(&env, timeout);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
     }
 }

@@ -43,15 +43,24 @@ notify_on = ["failure", "warning", "long_running"]
 
 [services.appwrite]
 enabled = true
-criticality = "production"
-type = "complex"
+description = "Appwrite application backup"
 schedule = "0 2 * * *"
 targets = ["home", "hetzner"]
 timeout_seconds = 7200
-# Either:
-backup_script = "/path/to/script.sh"  # For legacy scripts
-# Or:
-strategy = "appwrite"  # Built-in strategy
+
+[services.appwrite.config]
+paths = ["/tmp/appwrite-db.sql"]
+volumes = ["appwrite_appwrite-uploads", "appwrite_appwrite-functions"]
+
+[[services.appwrite.config.pre_backup_hooks]]
+name = "Dump MariaDB"
+command = "docker exec appwrite-mariadb mysqldump -u root appwrite > /tmp/appwrite-db.sql"
+timeout_seconds = 600
+
+[[services.appwrite.config.post_backup_hooks]]
+name = "Cleanup dump"
+command = "rm -f /tmp/appwrite-db.sql"
+continue_on_error = true
 ```
 
 ## Architecture
@@ -63,44 +72,38 @@ The codebase follows a clean separation of concerns:
 ```
 src/
 ├── main.rs              # CLI entry point, argument parsing
+├── lib.rs               # Library API exports
 ├── config/              # Configuration loading and validation
-│   ├── mod.rs
-│   └── types.rs         # Config struct definitions
+│   ├── mod.rs           # Public API
+│   ├── types.rs         # Config struct definitions
+│   └── loader.rs        # Loading and validation
 ├── managers/            # High-level orchestration
-│   ├── backup.rs        # Backup execution coordination
-│   ├── restore.rs       # Restoration coordination
-│   ├── status.rs        # Health checks and reporting
-│   ├── notification.rs  # Discord webhook integration
-│   └── logging.rs       # Structured logging with rotation
-├── strategies/          # Service-specific backup implementations
-│   ├── base.rs          # Strategy trait definition
-│   ├── generic.rs       # Files + Docker volumes
-│   ├── appwrite.rs      # MariaDB dump + volumes
-│   └── immich.rs        # PostgreSQL dump + photo library (dual repos)
-├── utils/               # Shared utilities
-│   ├── restic.rs        # Restic subprocess wrappers
-│   ├── docker.rs        # Docker command helpers
-│   └── locker.rs        # File-based locking (prevent concurrent runs)
-└── cli/                 # Command implementations
-    └── commands.rs      # Subcommand handlers
+│   └── backup.rs        # Backup execution with hooks
+└── utils/               # Shared utilities
+    ├── command.rs       # Command execution with timeouts
+    ├── restic.rs        # Restic subprocess wrappers
+    ├── restic_ops.rs    # ResticOperations trait (for mocking)
+    ├── docker.rs        # Docker command helpers
+    ├── docker_ops.rs    # DockerOperations trait (for mocking)
+    ├── executor.rs      # CommandExecutor trait
+    ├── locker.rs        # File-based locking (prevent concurrent runs)
+    ├── cron.rs          # Cron job management
+    └── restic_installer.rs  # Restic binary download/update
 ```
 
-### Strategy Pattern
+### Hook-Based Architecture
 
-Each service type implements the `BackupStrategy` trait:
+Instead of service-specific strategies, all services use the same backup flow with customizable hooks:
 
-```rust
-trait BackupStrategy {
-    fn backup(&self, config: &ServiceConfig, dest: &Destination) -> Result<()>;
-    fn restore(&self, config: &ServiceConfig, snapshot_id: &str) -> Result<()>;
-}
-```
+1. **Pre-backup hooks**: Run before backup (e.g., database dumps)
+2. **Volume archiving**: Archive Docker volumes to temp directory
+3. **Path collection**: Gather paths relative to docker_base
+4. **Restic backup**: Push everything to repository
+5. **Retention**: Apply retention policy
+6. **Cleanup**: Remove temporary files
+7. **Post-backup hooks**: Run after backup (e.g., cleanup dumps)
 
-**Generic Strategy**: Backs up paths relative to `docker_base`, archives Docker volumes using `docker run --rm -v volume:/data -v /tmp:/backup alpine tar czf ...`, then pushes to restic.
-
-**Appwrite Strategy**: Not yet planned, can be a placeholer
-
-**Immich Strategy**: refer to immich docs
+This approach is more flexible than hardcoded strategies - any service can be backed up using the appropriate hooks
 
 ### CLI Commands
 

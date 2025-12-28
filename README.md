@@ -134,12 +134,11 @@ docker_base = "/var/lib/docker/volumes"
 type = "local"
 path = "/backup/repos"
 
-[[services]]
-name = "myapp"
+[services.myapp]
 enabled = true
+description = "My application backup"
 targets = ["local"]
 schedule = "0 2 * * *"
-strategy = "generic"
 
 [services.myapp.config]
 paths = ["myapp"]  # Relative to docker_base
@@ -205,12 +204,11 @@ retention_monthly = 24
 retention_yearly = 5
 
 # Services
-[[services]]
-name = "postgres"
+[services.postgres]
 enabled = true
+description = "PostgreSQL database backup"
 profile = "production"
 schedule = "0 2 * * *"  # Daily at 2 AM
-strategy = "generic"
 timeout_seconds = 7200  # 2 hours
 
 [services.postgres.config]
@@ -230,12 +228,11 @@ name = "Remove database dump"
 command = "rm -f /tmp/postgres-dump.sql"
 continue_on_error = true
 
-[[services]]
-name = "appwrite"
+[services.appwrite]
 enabled = true
+description = "Appwrite application backup"
 profile = "production"
 schedule = "0 3 * * *"  # Daily at 3 AM
-strategy = "generic"
 
 [services.appwrite.config]
 # Pre-backup: dump MariaDB
@@ -281,15 +278,11 @@ profile = "production"
 retention_daily = 30  # This service: keep 30 daily (overrides profile and global)
 ```
 
-### Backup Strategies
+### Backup Configuration
 
-#### Generic Strategy (Recommended)
-
-Handles files, Docker volumes, and custom operations via hooks:
+Configure paths, volumes, and hooks for each service:
 
 ```toml
-strategy = "generic"
-
 [services.myservice.config]
 # File paths (relative to docker_base)
 paths = ["myapp", "config"]
@@ -420,7 +413,6 @@ restic-manager status --service postgres
 Service: postgres
   Description: PostgreSQL database backup
   Schedule: Daily at 2:00 AM (0 2 * * *)
-  Strategy: generic
 
   Destination: local (/backup/repos)
     Snapshots: 14
@@ -747,24 +739,32 @@ restic-manager verify
 
 ## Documentation
 
-### Command Guides
-
-- [SETUP.md](SETUP.md) - Initialize directories and configure cron jobs
-- [SNAPSHOTS.md](SNAPSHOTS.md) - List and manage snapshots
-- [STATUS-VERIFY.md](STATUS-VERIFY.md) - Status reporting and verification
-- [RESTORE.md](RESTORE.md) - Interactive restoration guide
-
 ### Reference Documentation
 
 - [TESTING.md](TESTING.md) - Comprehensive testing guide
-- [RESTIC-MANAGEMENT.md](RESTIC-MANAGEMENT.md) - Restic binary management
-- [TODO.md](TODO.md) - Implementation roadmap
+- [CLAUDE.md](CLAUDE.md) - Development guidelines and architecture
+- [restic-manager-tests/README.md](restic-manager-tests/README.md) - Test crate documentation
 
-### Development
+## Current Status
 
-- [tests/README.md](tests/README.md) - Test suite overview
-- [tests/integration/README.md](tests/integration/README.md) - Integration tests
-- [tests/container/README.md](tests/container/README.md) - Container tests
+### Implemented Features ✅
+
+- **All 11 CLI Commands**: run, restore, status, list, snapshots, verify, setup, validate, setup-restic, update-restic, restic-version
+- **Backup Orchestration**: Hook-based pre/post-backup operations
+- **Docker Integration**: Volume archiving and restoration
+- **Multi-Destination Support**: Local, SFTP, S3, B2 repositories
+- **File Locking**: Prevents concurrent backups of the same service
+- **Timeout Handling**: Per-service and per-hook timeouts
+- **Restic Management**: Automatic download and updates
+- **Configuration Profiles**: DRY configuration with inheritance
+- **Comprehensive Testing**: 130+ tests with trait-based mocking
+
+### Planned Features (Not Yet Implemented) ⏳
+
+- **Discord Notifications**: Types defined but webhook sending not implemented
+- **Log Rotation**: File-based logging with automatic rotation
+- **Long-Running Detection**: Alert when backups exceed threshold
+- **Notification Rate Limiting**: Prevent notification spam
 
 ## Architecture
 
@@ -780,22 +780,20 @@ restic-manager/
 │   │   ├── types.rs         # Type definitions
 │   │   └── loader.rs        # Loading and validation
 │   ├── managers/            # High-level orchestration
-│   │   └── backup.rs        # Backup manager with locking
-│   ├── strategies/          # Backup strategies
-│   │   ├── mod.rs           # Strategy trait
-│   │   └── generic.rs       # Generic strategy with hooks
+│   │   └── backup.rs        # Backup manager with locking and hooks
 │   └── utils/               # Shared utilities
 │       ├── command.rs       # Command execution
 │       ├── restic.rs        # Restic operations
+│       ├── restic_ops.rs    # ResticOperations trait (for mocking)
 │       ├── docker.rs        # Docker volume operations
+│       ├── docker_ops.rs    # DockerOperations trait (for mocking)
+│       ├── executor.rs      # CommandExecutor trait
 │       ├── locker.rs        # File-based locking
 │       ├── cron.rs          # Cron job management
 │       └── restic_installer.rs # Binary management
-├── tests/
-│   ├── config_tests.rs      # Configuration tests
-│   ├── integration_automated.rs  # Automated test runners
-│   ├── integration/         # Integration test suite
-│   └── container/           # Container deployment tests
+├── restic-manager-tests/    # Dedicated test crate
+│   ├── src/lib.rs           # Test utilities (mocks, fixtures)
+│   └── tests/               # Unit, command, and integration tests
 ├── config.example.toml      # Example configuration
 └── README.md                # This file
 ```
@@ -851,11 +849,3 @@ Issues and pull requests welcome at: (add your repo URL)
 ## License
 
 TBD
-
-## Credits
-
-Built to replace a previous Python implementation with improved:
-- Type safety (Rust vs Python)
-- Performance (compiled vs interpreted)
-- Error handling (Result types vs exceptions)
-- Maintainability (strong typing and borrow checker)

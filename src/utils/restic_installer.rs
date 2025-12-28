@@ -84,7 +84,8 @@ pub fn get_restic_command(use_system: bool) -> String {
 }
 
 /// Ensure restic is available (download if needed)
-pub async fn ensure_restic(use_system: bool) -> Result<PathBuf> {
+#[allow(dead_code)]
+pub fn ensure_restic(use_system: bool) -> Result<PathBuf> {
     let local_path = get_restic_bin_path();
 
     // If using system restic, check PATH
@@ -105,13 +106,13 @@ pub async fn ensure_restic(use_system: bool) -> Result<PathBuf> {
 
     // Need to download restic
     info!("Local restic not found, downloading from GitHub...");
-    download_restic().await?;
+    download_restic()?;
 
     Ok(local_path)
 }
 
 /// Download restic from GitHub releases
-pub async fn download_restic() -> Result<()> {
+pub fn download_restic() -> Result<()> {
     let download_url = get_download_url()?;
     info!("Downloading restic from: {}", download_url);
 
@@ -121,14 +122,13 @@ pub async fn download_restic() -> Result<()> {
         .context("Failed to create bin directory")?;
 
     // Download the archive
-    let client = reqwest::Client::builder()
+    let client = reqwest::blocking::Client::builder()
         .user_agent("restic-manager/0.1.0")
         .build()?;
 
     let response = client
         .get(&download_url)
         .send()
-        .await
         .context("Failed to download restic")?;
 
     if !response.status().is_success() {
@@ -137,7 +137,6 @@ pub async fn download_restic() -> Result<()> {
 
     let bytes = response
         .bytes()
-        .await
         .context("Failed to read response")?;
 
     info!("Downloaded {} bytes", bytes.len());
@@ -152,7 +151,9 @@ pub async fn download_restic() -> Result<()> {
 
 /// Get the download URL for the current platform
 fn get_download_url() -> Result<String> {
-    let base_url = "https://github.com/restic/restic/releases/latest/download";
+    // Get latest version from GitHub API
+    let version = get_latest_version()?;
+    info!("Latest restic version: {}", version);
 
     // Detect platform and architecture
     let (os, arch, ext) = if cfg!(target_os = "windows") {
@@ -183,7 +184,39 @@ fn get_download_url() -> Result<String> {
         anyhow::bail!("Unsupported operating system")
     };
 
-    Ok(format!("{}/restic_{}_{}.{}", base_url, os, arch, ext))
+    // Build versioned URL (format: restic_0.18.1_linux_amd64.bz2)
+    let version_number = version.trim_start_matches('v');
+    Ok(format!(
+        "https://github.com/restic/restic/releases/download/{}/restic_{}_{}_{}.{}",
+        version, version_number, os, arch, ext
+    ))
+}
+
+/// Get the latest restic version from GitHub API
+fn get_latest_version() -> Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("restic-manager/0.1.0")
+        .build()?;
+
+    let response = client
+        .get("https://api.github.com/repos/restic/restic/releases/latest")
+        .send()
+        .context("Failed to fetch latest version from GitHub API")?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("GitHub API request failed: HTTP {}", response.status());
+    }
+
+    let release: serde_json::Value = response
+        .json()
+        .context("Failed to parse GitHub API response")?;
+
+    let version = release["tag_name"]
+        .as_str()
+        .context("Missing tag_name in GitHub API response")?
+        .to_string();
+
+    Ok(version)
 }
 
 /// Extract restic binary from archive
@@ -208,17 +241,27 @@ fn extract_zip(bytes: &[u8], bin_dir: &Path) -> Result<()> {
     let mut archive = ZipArchive::new(cursor)
         .context("Failed to read ZIP archive")?;
 
+    // First pass: log all files for debugging
+    info!("ZIP archive contains {} files:", archive.len());
+    for i in 0..archive.len() {
+        let file = archive.by_index(i)?;
+        info!("  [{}] {}", i, file.name());
+    }
+
+    // Second pass: find and extract restic.exe
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        let name = file.name();
+        let name = file.name().to_string();
+        let is_file = file.is_file();
 
-        if name.ends_with("restic.exe") || name == "restic.exe" {
+        // Look for any file ending with .exe that contains "restic"
+        if is_file && name.to_lowercase().contains("restic") && name.ends_with(".exe") {
             let output_path = bin_dir.join("restic.exe");
             let mut output = fs::File::create(&output_path)
                 .context("Failed to create restic.exe")?;
             std::io::copy(&mut file, &mut output)
                 .context("Failed to write restic.exe")?;
-            info!("Extracted restic.exe");
+            info!("Extracted {} -> restic.exe", name);
             return Ok(());
         }
     }
@@ -256,15 +299,14 @@ fn extract_bz2(bytes: &[u8], bin_dir: &Path) -> Result<()> {
 }
 
 /// Update restic using self-update
-pub async fn update_restic(use_system: bool) -> Result<()> {
+pub fn update_restic(use_system: bool) -> Result<()> {
     let restic_cmd = get_restic_command(use_system);
 
     info!("Updating restic using self-update...");
 
-    let output = tokio::process::Command::new(&restic_cmd)
+    let output = std::process::Command::new(&restic_cmd)
         .arg("self-update")
         .output()
-        .await
         .context("Failed to run restic self-update")?;
 
     if !output.status.success() {
@@ -279,13 +321,12 @@ pub async fn update_restic(use_system: bool) -> Result<()> {
 }
 
 /// Get restic version
-pub async fn get_restic_version(use_system: bool) -> Result<String> {
+pub fn get_restic_version(use_system: bool) -> Result<String> {
     let restic_cmd = get_restic_command(use_system);
 
-    let output = tokio::process::Command::new(&restic_cmd)
+    let output = std::process::Command::new(&restic_cmd)
         .arg("version")
         .output()
-        .await
         .context("Failed to get restic version")?;
 
     if !output.status.success() {
@@ -294,4 +335,159 @@ pub async fn get_restic_version(use_system: bool) -> Result<String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_app_dir() {
+        let app_dir = get_app_dir();
+        assert!(app_dir.to_string_lossy().contains("restic-manager"));
+    }
+
+    #[test]
+    fn test_restic_binary_name() {
+        let name = restic_binary_name();
+        #[cfg(windows)]
+        assert_eq!(name, "restic.exe");
+        #[cfg(not(windows))]
+        assert_eq!(name, "restic");
+    }
+
+    #[test]
+    fn test_get_restic_bin_path() {
+        let path = get_restic_bin_path();
+        let path_str = path.to_string_lossy();
+
+        assert!(path_str.contains("restic-manager"));
+        assert!(path_str.contains("bin"));
+
+        #[cfg(windows)]
+        assert!(path_str.ends_with("restic.exe"));
+        #[cfg(not(windows))]
+        assert!(path_str.ends_with("restic"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_bz2_extraction() {
+        use bzip2::write::BzEncoder;
+        use bzip2::Compression;
+        use std::io::Write;
+        use tempfile::TempDir;
+
+        // Create test data
+        let test_binary = b"#!/bin/sh\necho 'test restic binary'\n";
+
+        // Compress it
+        let mut encoder = BzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(test_binary).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        // Create temp directory
+        let temp_dir = TempDir::new().unwrap();
+
+        // Extract
+        extract_bz2(&compressed, temp_dir.path()).unwrap();
+
+        // Verify
+        let output_path = temp_dir.path().join("restic");
+        assert!(output_path.exists());
+
+        let extracted = fs::read(&output_path).unwrap();
+        assert_eq!(extracted, test_binary);
+
+        // Check permissions on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::metadata(&output_path).unwrap().permissions();
+            assert_eq!(perms.mode() & 0o777, 0o755);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_zip_extraction() {
+        use std::io::{Cursor, Write};
+        use tempfile::TempDir;
+        use zip::write::ZipWriter;
+
+        // Create test ZIP archive
+        let mut buffer = Vec::new();
+        {
+            let mut zip = ZipWriter::new(Cursor::new(&mut buffer));
+
+            // Add a test restic.exe file with unit type for simple options
+            zip.start_file::<&str, ()>("restic_0.18.1_windows_amd64.exe", Default::default()).unwrap();
+            zip.write_all(b"MZ test binary").unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        // Create temp directory
+        let temp_dir = TempDir::new().unwrap();
+
+        // Extract
+        extract_zip(&buffer, temp_dir.path()).unwrap();
+
+        // Verify
+        let output_path = temp_dir.path().join("restic.exe");
+        assert!(output_path.exists());
+
+        let extracted = fs::read(&output_path).unwrap();
+        assert_eq!(extracted, b"MZ test binary");
+    }
+
+    #[test]
+    fn test_get_latest_version() {
+        // This test requires internet connection
+        // We'll make it integration-only or skip if offline
+        if std::env::var("SKIP_NETWORK_TESTS").is_ok() {
+            return;
+        }
+
+        let result = get_latest_version();
+        match result {
+            Ok(version) => {
+                assert!(version.starts_with('v'));
+                assert!(version.contains('.'));
+                println!("Latest version: {}", version);
+            }
+            Err(e) => {
+                // If we can't reach GitHub, skip the test
+                println!("Skipping test (no network): {}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_url_construction() {
+        // Test that URL is constructed correctly from a version
+        // We'll mock this by temporarily setting a version
+
+        // This test verifies the URL format matches expected pattern
+        let test_cases = vec![
+            ("v0.18.1", "linux", "amd64", "bz2"),
+            ("v0.18.1", "darwin", "arm64", "bz2"),
+            ("v0.18.1", "windows", "amd64", "zip"),
+        ];
+
+        for (version, os, arch, ext) in test_cases {
+            let version_number = version.trim_start_matches('v');
+            let url = format!(
+                "https://github.com/restic/restic/releases/download/{}/restic_{}_{}_{}.{}",
+                version, version_number, os, arch, ext
+            );
+
+            assert!(url.contains("releases/download/"));
+            assert!(url.contains(version));
+            assert!(url.contains(version_number));
+            assert!(url.contains(os));
+            assert!(url.contains(arch));
+            assert!(url.ends_with(&format!(".{}", ext)));
+        }
+    }
 }

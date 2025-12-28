@@ -75,6 +75,7 @@ impl BackupLock {
     }
 
     /// Get the lock file path (for cleanup or inspection)
+    #[allow(dead_code)]
     pub fn path(&self) -> &Path {
         &self.lock_path
     }

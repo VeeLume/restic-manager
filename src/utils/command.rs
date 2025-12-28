@@ -3,10 +3,12 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-/// Run a command with optional timeout
+/// Run a command with optional timeout using thread-based implementation
 pub fn run_command(
     program: &str,
     args: &[&str],
@@ -25,17 +27,20 @@ pub fn run_command(
     debug!("Running command: {} {}", program, args.join(" "));
 
     let output = if let Some(timeout_duration) = timeout {
-        // Use tokio for timeout support
-        let handle = tokio::runtime::Handle::current();
-        handle.block_on(async {
-            let result = tokio::time::timeout(timeout_duration, tokio::process::Command::from(cmd).output())
-                .await;
+        // Thread-based timeout implementation
+        let (tx, rx) = mpsc::channel();
 
-            match result {
-                Ok(output) => output.context(format!("Failed to execute {}", program)),
-                Err(_) => Err(anyhow::anyhow!("Command timed out after {:?}", timeout_duration)),
+        thread::spawn(move || {
+            let result = cmd.output();
+            let _ = tx.send(result);
+        });
+
+        match rx.recv_timeout(timeout_duration) {
+            Ok(result) => result.context(format!("Failed to execute {}", program))?,
+            Err(_) => {
+                anyhow::bail!("Command timed out after {:?}", timeout_duration);
             }
-        })?
+        }
     } else {
         cmd.output()
             .context(format!("Failed to execute {}", program))?

@@ -1,13 +1,11 @@
 mod config;
 mod managers;
-mod strategies;
 mod utils;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use managers::backup::BackupManager;
 use std::path::PathBuf;
-use tracing::Level;
 
 #[derive(Parser)]
 #[command(name = "restic-manager")]
@@ -118,16 +116,40 @@ enum Commands {
     ResticVersion,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Setup logging
-    setup_logging();
+    // Commands that don't require a config file - use simple console logging
+    match &cli.command {
+        Some(Commands::SetupRestic) => {
+            managers::logging::init_console_logging();
+            return handle_setup_restic();
+        }
+        Some(Commands::UpdateRestic) => {
+            managers::logging::init_console_logging();
+            return handle_update_restic(cli.use_system_restic);
+        }
+        Some(Commands::ResticVersion) => {
+            managers::logging::init_console_logging();
+            return handle_restic_version(cli.use_system_restic);
+        }
+        _ => {
+            // All other commands require config and full logging
+        }
+    }
 
     // Load and validate configuration (needed for use_system_restic setting)
     let config = config::load_config(&cli.config)?;
     let resolved_services = config::resolve_all_services(&config)?;
+
+    // Setup logging with file rotation (must keep guard alive)
+    let logging_config = managers::logging::LoggingConfig::from_config(
+        &config.global.log_directory,
+        &config.global.log_level,
+        config.global.log_max_files,
+        config.global.log_max_size_mb,
+    );
+    let _log_guard = managers::logging::init_logging(&logging_config)?;
 
     // Determine if we should use system restic (CLI arg overrides config)
     let use_system_restic = cli.use_system_restic || config.global.use_system_restic;
@@ -135,10 +157,10 @@ async fn main() -> Result<()> {
     // Set global flag for restic operations
     utils::restic::set_use_system_restic(use_system_restic);
 
-    // Ensure restic is available (except for setup/version commands)
+    // Ensure restic is available (except for validate command)
     match cli.command {
-        Some(Commands::SetupRestic) | Some(Commands::ResticVersion) | Some(Commands::Validate) => {
-            // Skip restic check for these commands
+        Some(Commands::Validate) => {
+            // Skip restic check for validate
         }
         _ => {
             // For all other commands, ensure restic is available
@@ -361,7 +383,6 @@ async fn main() -> Result<()> {
                 println!("Description: {}", service_config.description);
                 println!("Enabled: {}", if service_config.enabled { "Yes" } else { "No" });
                 println!("Schedule: {}", service_config.schedule);
-                println!("Strategy: {:?}", service_config.strategy);
                 println!("Timeout: {} seconds", service_config.timeout_seconds);
                 println!("Targets: {}", service_config.targets.join(", "));
                 println!();
@@ -459,7 +480,6 @@ async fn main() -> Result<()> {
                 println!("    Enabled: {}", svc.enabled);
                 println!("    Schedule: {}", svc.schedule);
                 println!("    Targets: {}", svc.targets.join(", "));
-                println!("    Strategy: {:?}", svc.strategy);
                 println!();
             }
         }
@@ -647,12 +667,12 @@ async fn main() -> Result<()> {
                 println!("DRY RUN MODE - No changes will be made\n");
             }
 
-            let mut total_steps = 0;
-            let mut completed_steps = 0;
+            let mut _total_steps = 0;
+            let mut _completed_steps = 0;
 
             // Step 1: Create directories (unless cron-only)
             if !cron_only {
-                total_steps += 1;
+                _total_steps += 1;
                 println!("[1/4] Creating directories...");
 
                 // Create log directory
@@ -663,7 +683,7 @@ async fn main() -> Result<()> {
                     match std::fs::create_dir_all(log_dir) {
                         Ok(_) => {
                             println!("  ✓ Created {}", log_dir.display());
-                            completed_steps += 1;
+                            _completed_steps += 1;
                         }
                         Err(e) => eprintln!("  ✗ Failed to create {}: {}", log_dir.display(), e),
                     }
@@ -689,7 +709,7 @@ async fn main() -> Result<()> {
 
             // Step 2: Initialize restic repositories (unless cron-only)
             if !cron_only {
-                total_steps += 1;
+                _total_steps += 1;
                 println!("[2/4] Initializing restic repositories...");
 
                 for (service_name, service_config) in &resolved_services {
@@ -717,7 +737,7 @@ async fn main() -> Result<()> {
                             match utils::restic::init_repository(&env, std::time::Duration::from_secs(300)) {
                                 Ok(_) => {
                                     println!("  ✓ Initialized {} at {} ({})", service_name, target_name, destination.url);
-                                    completed_steps += 1;
+                                    _completed_steps += 1;
                                 }
                                 Err(e) => eprintln!("  ✗ Failed to initialize {} at {}: {}", service_name, target_name, e),
                             }
@@ -730,7 +750,7 @@ async fn main() -> Result<()> {
 
             // Step 3: Install cron jobs (unless dirs-only)
             if !dirs_only {
-                total_steps += 1;
+                _total_steps += 1;
                 println!("[3/4] Installing cron jobs...");
 
                 #[cfg(unix)]
@@ -757,7 +777,7 @@ async fn main() -> Result<()> {
                         ) {
                             Ok(_) => {
                                 println!("  ✓ Added job for '{}' ({})", service_name, service_config.schedule);
-                                completed_steps += 1;
+                                _completed_steps += 1;
                             }
                             Err(e) => eprintln!("  ✗ Failed to add job for {}: {}", service_name, e),
                         }
@@ -774,7 +794,7 @@ async fn main() -> Result<()> {
             }
 
             // Step 4: Verify setup
-            total_steps += 1;
+            _total_steps += 1;
             println!("[4/4] Verifying setup...");
 
             if !dirs_only {
@@ -835,83 +855,83 @@ async fn main() -> Result<()> {
             println!("Profiles: {}", config.profiles.len());
         }
 
-        Commands::SetupRestic => {
-            println!("Setting up managed restic binary...");
-
-            if utils::restic_installer::local_restic_exists() {
-                println!("✓ Managed restic is already installed");
-                let version = utils::restic_installer::get_restic_version(false).await?;
-                println!("  Version: {}", version);
-                println!("  Binary: {}", utils::restic_installer::get_restic_bin_path().display());
-            } else {
-                println!("Downloading restic from GitHub...");
-                utils::restic_installer::download_restic().await?;
-                let version = utils::restic_installer::get_restic_version(false).await?;
-                println!("✓ Restic installed successfully");
-                println!("  Version: {}", version);
-                println!("  Binary: {}", utils::restic_installer::get_restic_bin_path().display());
-                println!();
-                println!("To use this binary, ensure use_system_restic = false in your config (default).");
-            }
-        }
-
-        Commands::UpdateRestic => {
-            println!("Updating restic...");
-
-            if !utils::restic_installer::restic_exists(use_system_restic) {
-                if use_system_restic {
-                    println!("System restic not found in PATH.");
-                } else {
-                    println!("Managed restic not found. Run 'restic-manager setup-restic' first.");
-                }
-                std::process::exit(1);
-            }
-
-            let old_version = utils::restic_installer::get_restic_version(use_system_restic).await?;
-            println!("Current version: {}", old_version);
-
-            utils::restic_installer::update_restic(use_system_restic).await?;
-
-            let new_version = utils::restic_installer::get_restic_version(use_system_restic).await?;
-            println!("✓ Updated to: {}", new_version);
-        }
-
-        Commands::ResticVersion => {
-            if !utils::restic_installer::restic_exists(use_system_restic) {
-                if use_system_restic {
-                    println!("System restic not found in PATH.");
-                } else {
-                    println!("Managed restic not found. Run 'restic-manager setup-restic' first.");
-                }
-                std::process::exit(1);
-            }
-
-            let version = utils::restic_installer::get_restic_version(use_system_restic).await?;
-            println!("Restic version: {}", version);
-            println!("Binary location: {}", utils::restic_installer::get_restic_command(use_system_restic));
-
-            if use_system_restic {
-                println!("Source: System PATH (use_system_restic = true)");
-            } else {
-                println!("Source: Managed binary (use_system_restic = false)");
-            }
+        // SetupRestic, UpdateRestic, and ResticVersion are handled at the start of main()
+        Commands::SetupRestic | Commands::UpdateRestic | Commands::ResticVersion => {
+            unreachable!("These commands are handled before config loading")
         }
     }
 
     Ok(())
 }
 
-/// Setup logging with tracing
-fn setup_logging() {
-    use tracing_subscriber::{fmt, EnvFilter};
+/// Handle setup-restic command (doesn't require config)
+fn handle_setup_restic() -> Result<()> {
+    println!("Setting up managed restic binary...");
 
-    // Default to INFO level, but allow override via RUST_LOG env var
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    if utils::restic_installer::local_restic_exists() {
+        println!("✓ Managed restic is already installed");
+        let version = utils::restic_installer::get_restic_version(false)?;
+        println!("  Version: {}", version);
+        println!("  Binary: {}", utils::restic_installer::get_restic_bin_path().display());
+    } else {
+        println!("Downloading restic from GitHub...");
+        utils::restic_installer::download_restic()?;
+        let version = utils::restic_installer::get_restic_version(false)?;
+        println!("✓ Restic installed successfully");
+        println!("  Version: {}", version);
+        println!("  Binary: {}", utils::restic_installer::get_restic_bin_path().display());
+        println!();
+        println!("To use this binary, ensure use_system_restic = false in your config (default).");
+    }
 
-    fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .with_level(true)
-        .init();
+    Ok(())
 }
+
+/// Handle update-restic command (doesn't require config)
+fn handle_update_restic(use_system_restic: bool) -> Result<()> {
+    println!("Updating restic...");
+
+    if !utils::restic_installer::restic_exists(use_system_restic) {
+        if use_system_restic {
+            println!("System restic not found in PATH.");
+        } else {
+            println!("Managed restic not found. Run 'restic-manager setup-restic' first.");
+        }
+        std::process::exit(1);
+    }
+
+    let old_version = utils::restic_installer::get_restic_version(use_system_restic)?;
+    println!("Current version: {}", old_version);
+
+    utils::restic_installer::update_restic(use_system_restic)?;
+
+    let new_version = utils::restic_installer::get_restic_version(use_system_restic)?;
+    println!("✓ Updated to: {}", new_version);
+
+    Ok(())
+}
+
+/// Handle restic-version command (doesn't require config)
+fn handle_restic_version(use_system_restic: bool) -> Result<()> {
+    if !utils::restic_installer::restic_exists(use_system_restic) {
+        if use_system_restic {
+            println!("System restic not found in PATH.");
+        } else {
+            println!("Managed restic not found. Run 'restic-manager setup-restic' first.");
+        }
+        std::process::exit(1);
+    }
+
+    let version = utils::restic_installer::get_restic_version(use_system_restic)?;
+    println!("Restic version: {}", version);
+    println!("Binary location: {}", utils::restic_installer::get_restic_command(use_system_restic));
+
+    if use_system_restic {
+        println!("Source: System PATH (use_system_restic = true)");
+    } else {
+        println!("Source: Managed binary (use_system_restic = false)");
+    }
+
+    Ok(())
+}
+
