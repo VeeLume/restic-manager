@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Quick unit tests
+  test:
+    name: Unit Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: [stable]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: ${{ matrix.rust }}
+        override: true
+        components: rustfmt, clippy
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo build
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Check formatting
+      run: cargo fmt -- --check
+
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
+
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Run unit tests
+      run: cargo test --lib --verbose
+
+    - name: Run config tests
+      run: cargo test --test config_tests --verbose
+
+  # Integration test with Docker (Linux only)
+  integration:
+    name: Integration Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build release binary
+      run: cargo build --release
+
+    - name: Run integration test setup
+      run: |
+        cd tests/integration
+        chmod +x setup.sh cleanup.sh
+        ./setup.sh
+
+    - name: Run integration backup test
+      run: |
+        cargo run --release -- \
+          --config tests/integration/config.toml \
+          run --service postgres-backup
+
+    - name: Check backup artifacts
+      run: |
+        test -d tests/integration/test-data || exit 1
+        test -d tests/integration/test-backup-repo || exit 1
+        echo "✓ Backup artifacts verified"
+
+    - name: Integration test cleanup
+      if: always()
+      run: |
+        cd tests/integration
+        ./cleanup.sh
+
+  # Container deployment test (Linux only)
+  container:
+    name: Container Deployment Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build release binary
+      run: cargo build --release
+
+    - name: Run container test setup
+      run: |
+        cd tests/container
+        chmod +x setup.sh cleanup.sh entrypoint.sh
+        ./setup.sh
+
+    - name: Setup restic in container
+      run: |
+        docker exec restic-manager-test /app/restic-manager setup-restic
+
+    - name: Create backup directory
+      run: |
+        docker exec restic-manager-test mkdir -p /backup-data/dumps
+
+    - name: Run backup in container
+      run: |
+        docker exec restic-manager-test \
+          /app/restic-manager --config /app/config.toml \
+          run --service postgres
+
+    - name: Check container logs
+      run: |
+        docker logs restic-manager-test
+
+    - name: Verify backup in container
+      run: |
+        docker exec restic-manager-test \
+          ls -la /backup-repo
+
+    - name: Container test cleanup
+      if: always()
+      run: |
+        cd tests/container
+        ./cleanup.sh
+
+  # Security audit
+  security_audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+
+    - name: Run security audit
+      run: cargo audit

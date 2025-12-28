@@ -1,0 +1,55 @@
+# Full integration test configuration with Docker
+[global]
+restic_password_file = "test_password"
+docker_base = "tests/integration/test-data"
+retention_daily = 3
+retention_weekly = 1
+retention_monthly = 1
+default_timeout_seconds = 300
+
+[destinations.local-test]
+type = "local"
+url = "tests/integration/test-backup-repo"
+description = "Local test backup repository"
+
+[services.postgres-backup]
+enabled = true
+description = "PostgreSQL test database backup with hooks"
+schedule = "0 2 * * *"
+targets = ["local-test"]
+strategy = "generic"
+timeout_seconds = 600
+
+[services.postgres-backup.config]
+# Backup the database dump and Docker volume
+paths = ["dumps"]
+volumes = ["restic-test-postgres-data"]
+excludes = ["*.log"]
+
+# Pre-backup hook: Dump PostgreSQL database (cross-platform)
+[[services.postgres-backup.config.pre_backup_hooks]]
+name = "Dump PostgreSQL database"
+command = "docker exec restic-test-postgres pg_dump -U testuser testdb > tests/integration/test-data/dumps/testdb-backup.sql"
+timeout_seconds = 120
+continue_on_error = false
+
+# Pre-backup hook: Create metadata file (cross-platform)
+[[services.postgres-backup.config.pre_backup_hooks]]
+name = "Create backup metadata"
+command = "date > tests/integration/test-data/dumps/backup-metadata.txt"
+timeout_seconds = 10
+continue_on_error = true
+
+# Post-backup hook: Verify dump was created (cross-platform)
+[[services.postgres-backup.config.post_backup_hooks]]
+name = "Verify dump file"
+command = "test -f tests/integration/test-data/dumps/testdb-backup.sql && echo 'Dump verified successfully' || (echo 'WARNING: Dump file not found' && exit 1)"
+timeout_seconds = 10
+continue_on_error = false
+
+# Post-backup hook: Show backup stats (cross-platform)
+[[services.postgres-backup.config.post_backup_hooks]]
+name = "Show backup statistics"
+command = "ls -lh tests/integration/test-data/dumps"
+timeout_seconds = 10
+continue_on_error = true

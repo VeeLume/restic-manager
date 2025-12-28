@@ -1,0 +1,195 @@
+# Production Backup Configuration for Valerie's Server
+# Generated based on existing backup setup
+
+[global]
+# Restic password file location
+restic_password_file = "/home/valerie/restic_password"
+
+# Base directory for Docker services
+docker_base = "/home/valerie/docker"
+log_directory = "/var/log/restic-manager"
+
+# Default timeout (1 hour)
+default_timeout_seconds = 3600
+
+# Retention policy
+retention_daily = 6
+retention_weekly = 3
+retention_monthly = 1
+
+# Global exclusions
+default_excludes = [".git", ".env", "node_modules", "target", "*.log"]
+
+# ===== BACKUP DESTINATIONS =====
+
+[destinations.home]
+type = "sftp"
+url = "sftp://valerie@home.veelume.icu//media/usbdrive"
+
+[destinations.hetzner]
+type = "sftp"
+url = "sftp://u486657@u486657.your-storagebox.de:23/backups"
+
+# ===== PROFILES =====
+
+# Production-critical services
+[profiles.production]
+targets = ["home", "hetzner"]
+retention_daily = 6
+retention_weekly = 3
+retention_monthly = 1
+
+# Important services
+[profiles.important]
+targets = ["home", "hetzner"]
+retention_daily = 6
+retention_weekly = 3
+retention_monthly = 1
+
+# Casual/recreational services
+[profiles.casual]
+targets = ["home"]
+retention_daily = 3
+retention_weekly = 2
+retention_monthly = 0
+
+# ===== SERVICES =====
+
+# ===== IMMICH - Photo Library and Database =====
+[services.immich]
+enabled = true
+profile = "important"
+schedule = "0 3 * * *"  # Daily at 3:00 AM
+strategy = "generic"
+timeout_seconds = 7200  # 2 hours for large photo libraries
+description = "Immich photo library and database"
+
+[services.immich.config]
+# Optional: Stop Immich server to prevent sync issues (recommended by Immich docs)
+# Uncomment if you want this safety measure:
+# [[services.immich.config.pre_backup_hooks]]
+# name = "Stop Immich server"
+# command = "docker stop immich_server || true"
+# timeout_seconds = 30
+# continue_on_error = true
+
+# Optional: Dump PostgreSQL database
+# Else we rely on Immich's internal backup mechanisms
+# [[services.immich.config.pre_backup_hooks]]
+# name = "Dump Immich PostgreSQL database"
+# command = "docker exec -t immich_postgres pg_dumpall --clean --if-exists --username=postgres | gzip > /tmp/immich-dump.sql.gz"
+# timeout_seconds = 600
+# continue_on_error = false
+
+# What to backup - photo library directories
+paths = [
+    "immich/upload/library",   # Photo library
+    "immich/upload/upload",    # Uploaded files
+    "immich/upload/profile"    # Profile pictures
+]
+
+# Additional exclusions for Immich
+excludes = ["thumbs", "encoded-video"]
+
+# Post-backup hooks
+# Remove database dump
+# [[services.immich.config.post_backup_hooks]]
+# name = "Remove database dump"
+# command = "rm -f /tmp/immich-dump.sql.gz"
+# continue_on_error = true
+
+# Optional: Restart Immich server if you stopped it
+# Uncomment if you stopped the server in pre-backup:
+# [[services.immich.config.post_backup_hooks]]
+# name = "Start Immich server"
+# command = "docker start immich_server || true"
+# timeout_seconds = 30
+# continue_on_error = true
+
+# ===== SHOMU DISCORD BOT - Guild Monitoring =====
+[services.shomu-discord-bot]
+enabled = true
+profile = "important"
+schedule = "0 4 * * *"  # Daily at 4:00 AM
+strategy = "generic"
+description = "Discord guild monitoring bot - logs are critical"
+
+[services.shomu-discord-bot.config]
+paths = ["shomu-discord-bot"]
+volumes = ["shomu-discord-bot_bot_data"]
+
+# ===== CASUAL/RECREATIONAL SERVICES (Weekly Backups) =====
+
+[services.pz-discord-bot]
+enabled = true
+profile = "casual"
+schedule = "0 10 * * 0"  # Weekly on Sunday at 10:00 AM
+strategy = "generic"
+description = "Project Zomboid Discord bot"
+
+[services.pz-discord-bot.config]
+paths = ["pz-discord-bot"]
+volumes = ["pz-discord-bot_bot_data"]
+
+[services.zomboid]
+enabled = true
+profile = "casual"
+schedule = "0 10 * * *"  # Daily at 10:00 AM
+strategy = "generic"
+description = "Project Zomboid game server"
+
+[services.zomboid.config]
+paths = ["zomboid"]
+
+[services.valheim]
+enabled = true
+profile = "casual"
+schedule = "0 6 * * *"  # Daily at 6:00 AM
+strategy = "generic"
+description = "Valheim game server"
+
+[services.valheim.config]
+paths = ["valheim"]
+
+[services.enshrouded]
+enabled = true
+profile = "casual"
+schedule = "0 6 * * *"  # Daily at 6:00 AM
+strategy = "generic"
+description = "Enshrouded game server"
+
+[services.enshrouded.config]
+paths = ["enshrouded"]
+
+# ===== FUTURE SERVICES =====
+# Add new services below as needed
+
+# Example template for Appwrite (when ready):
+# [services.appwrite]
+# enabled = false
+# profile = "production"
+# schedule = "0 2 * * *"
+# strategy = "generic"
+# timeout_seconds = 7200
+# description = "Appwrite BaaS - production service"
+#
+# [services.appwrite.config]
+# # Pre-backup hook for MariaDB
+# [[services.appwrite.config.pre_backup_hooks]]
+# name = "Dump Appwrite MariaDB"
+# command = "docker exec appwrite-mariadb mysqldump -u root -p${MYSQL_ROOT_PASSWORD} appwrite | gzip > /tmp/appwrite-db.sql.gz"
+# timeout_seconds = 600
+#
+# paths = ["/tmp/appwrite-db.sql.gz"]
+# volumes = [
+#     "appwrite_appwrite-uploads",
+#     "appwrite_appwrite-functions",
+#     "appwrite_appwrite-builds",
+#     "appwrite_appwrite-certificates",
+#     "appwrite_appwrite-config"
+# ]
+#
+# [[services.appwrite.config.post_backup_hooks]]
+# name = "Remove database dump"
+# command = "rm -f /tmp/appwrite-db.sql.gz"
+# continue_on_error = true

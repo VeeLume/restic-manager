@@ -1,0 +1,283 @@
+# Restic Manager Configuration
+# This file demonstrates the configuration format with inheritance and overrides
+
+# ============================================================================
+# GLOBAL DEFAULTS
+# ============================================================================
+# These settings apply to all services unless overridden
+
+[global]
+# Restic password file (required)
+restic_password_file = "/home/valerie/restic_password"
+
+# Base directory for Docker services
+docker_base = "/home/valerie/docker"
+
+# Default retention policy (can be overridden per service or profile)
+retention_daily = 7
+retention_weekly = 4
+retention_monthly = 6
+retention_yearly = 2
+
+# Timeout settings
+default_timeout_seconds = 3600  # 1 hour default
+long_running_threshold_minutes = 120  # 2 hours
+
+# Logging
+log_directory = "/home/valerie/logs"
+log_level = "info"  # debug, info, warn, error
+log_max_files = 10
+log_max_size_mb = 10
+
+# Default exclusion patterns (applied to all generic backups)
+default_excludes = [
+    ".git",
+    ".env",
+    "*.log",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".cache",
+]
+
+# Use system restic from PATH instead of managed binary
+# Default: false (use managed binary downloaded by setup-restic)
+# Set to true only if you have restic installed system-wide and want to use that
+use_system_restic = false
+
+# ============================================================================
+# BACKUP DESTINATIONS
+# ============================================================================
+
+[destinations.home]
+type = "sftp"
+url = "sftp://valerie@home.veelume.icu//media/usbdrive"
+description = "Home Raspberry Pi with USB HDD"
+
+[destinations.hetzner]
+type = "sftp"
+url = "sftp://u486657@u486657.your-storagebox.de:23/backups"
+description = "Hetzner Storage Box"
+
+# ============================================================================
+# NOTIFICATION SETTINGS
+# ============================================================================
+
+[notifications]
+# Discord webhook URL (leave empty to disable)
+discord_webhook_url = "https://discord.com/api/webhooks/YOUR_WEBHOOK_HERE"
+
+# When to send notifications
+notify_on = ["failure", "warning"]  # Options: failure, warning, long_running, success
+
+# Rate limiting: don't spam the same error
+rate_limit_minutes = 60
+
+# Notification cache (tracks what we've sent recently)
+cache_file = "~/.cache/restic-manager-notifications.json"
+
+# ============================================================================
+# PROFILES (Optional)
+# ============================================================================
+# Profiles are templates that services can inherit from.
+# They help reduce repetition for similar services.
+
+[profiles.production]
+targets = ["home", "hetzner"]
+retention_daily = 14  # Keep more backups for production
+retention_weekly = 8
+retention_monthly = 12
+notify_on = ["failure", "warning", "long_running"]
+
+[profiles.important]
+targets = ["home", "hetzner"]
+retention_daily = 7
+retention_weekly = 4
+
+[profiles.casual]
+targets = ["home"]  # Only home backup for casual services
+retention_daily = 3
+retention_weekly = 2
+retention_monthly = 1
+
+# ============================================================================
+# SERVICES
+# ============================================================================
+# Each service can:
+# - Inherit from a profile (optional)
+# - Override any setting from the profile or global defaults
+# - Use either a built-in strategy or a custom script
+
+# -----------------------------------------------------------------------------
+# Production Services
+# -----------------------------------------------------------------------------
+
+[services.appwrite]
+enabled = true
+profile = "production"  # Inherits targets, retention, notify_on
+description = "Appwrite BaaS - production service"
+
+# Schedule (cron format)
+schedule = "0 2 * * *"  # Daily at 2:00 AM
+
+# Backup strategy
+strategy = "appwrite"  # Built-in strategy
+
+# Override timeout (Appwrite can take longer)
+timeout_seconds = 7200  # 2 hours
+
+# Appwrite-specific configuration
+[services.appwrite.config]
+mariadb_container = "appwrite-mariadb"
+mariadb_database = "appwrite"
+mariadb_user = "root"
+volumes = [
+    "appwrite_appwrite-uploads",
+    "appwrite_appwrite-functions",
+    "appwrite_appwrite-builds",
+    "appwrite_appwrite-cache",
+    "appwrite_appwrite-certificates",
+    "appwrite_appwrite-config",
+]
+
+[services.immich]
+enabled = true
+profile = "production"
+description = "Immich photo library and database"
+schedule = "0 3 * * *"  # Daily at 3:00 AM
+strategy = "immich"
+timeout_seconds = 14400  # 4 hours (large photo library)
+
+[services.immich.config]
+postgres_container = "immich_postgres"
+postgres_database = "immich"
+postgres_user = "postgres"
+library_path = "/home/valerie/docker/immich/upload/library"
+# Immich uses two repositories
+database_repo_suffix = "-database"  # Creates immich-database repo
+library_repo_suffix = ""  # Main immich repo
+
+# Example: Immich using generic strategy with hooks instead of built-in strategy
+# [[services.immich.config.pre_backup_hooks]]
+# name = "Dump PostgreSQL database"
+# command = "docker exec immich_postgres pg_dump -U postgres immich > /tmp/immich-db.sql"
+# timeout_seconds = 600
+# continue_on_error = false
+#
+# [[services.immich.config.post_backup_hooks]]
+# name = "Cleanup database dump"
+# command = "rm -f /tmp/immich-db.sql"
+# continue_on_error = true
+
+# -----------------------------------------------------------------------------
+# Important Services (need regular backups)
+# -----------------------------------------------------------------------------
+
+[services.shomu-discord-bot]
+enabled = true
+profile = "important"
+description = "Discord guild monitoring bot"
+schedule = "0 4 * * *"  # Daily at 4:00 AM
+strategy = "generic"
+
+[services.shomu-discord-bot.config]
+paths = ["shomu-discord-bot"]
+volumes = ["shomu-discord-bot_bot_data"]
+# Additional excludes (added to default_excludes)
+excludes = ["*.db-shm", "*.db-wal"]
+
+# Example pre-backup hook for database dump
+# [[services.shomu-discord-bot.config.pre_backup_hooks]]
+# name = "Dump SQLite database"
+# command = "sqlite3 /path/to/db.sqlite .dump > /tmp/shomu-db-dump.sql"
+# timeout_seconds = 300
+#
+# Example post-backup hook for cleanup
+# [[services.shomu-discord-bot.config.post_backup_hooks]]
+# name = "Cleanup temp files"
+# command = "rm -f /tmp/shomu-db-dump.sql"
+# continue_on_error = true
+
+# -----------------------------------------------------------------------------
+# Casual Services (less frequent backups)
+# -----------------------------------------------------------------------------
+
+[services.pz-discord-bot]
+enabled = true
+profile = "casual"
+description = "Project Zomboid Discord bot"
+schedule = "0 5 * * 0"  # Weekly on Sunday at 5:00 AM
+strategy = "generic"
+
+[services.pz-discord-bot.config]
+paths = ["pz-discord-bot"]
+volumes = ["pz-discord-bot_bot_data"]
+
+[services.zomboid]
+enabled = true
+profile = "casual"
+description = "Project Zomboid game server"
+schedule = "0 5 * * 0"
+strategy = "generic"
+
+[services.zomboid.config]
+paths = ["zomboid"]
+
+[services.valheim]
+enabled = true
+profile = "casual"
+description = "Valheim game server"
+schedule = "0 5 * * 0"
+strategy = "generic"
+
+[services.valheim.config]
+paths = ["valheim"]
+
+[services.enshrouded]
+enabled = true
+profile = "casual"
+description = "Enshrouded game server"
+schedule = "0 5 * * 0"
+strategy = "generic"
+
+[services.enshrouded.config]
+paths = ["enshrouded"]
+
+# -----------------------------------------------------------------------------
+# Legacy Script Example
+# -----------------------------------------------------------------------------
+# If you have a custom backup script that's not yet converted to a strategy,
+# you can still use it:
+
+# [services.custom-service]
+# enabled = false
+# targets = ["home"]  # Can specify directly without profile
+# description = "Service with custom backup script"
+# schedule = "0 6 * * *"
+# backup_script = "/home/valerie/scripts/custom_backup.sh"
+#
+# # Script will receive these environment variables:
+# # - RESTIC_PASSWORD_FILE
+# # - RESTIC_REPOSITORY (for each target)
+# # - SERVICE_NAME
+# # - DOCKER_BASE
+
+# ============================================================================
+# CONFIGURATION INHERITANCE
+# ============================================================================
+#
+# Settings are applied in this order (later overrides earlier):
+# 1. Global defaults
+# 2. Profile settings (if profile is specified)
+# 3. Service-level settings
+#
+# Example:
+# - Global sets timeout to 3600
+# - Production profile doesn't override it
+# - Appwrite service sets timeout_seconds = 7200
+# - Result: Appwrite uses 7200, other production services use 3600
+#
+# Arrays (like excludes) are ADDITIVE:
+# - default_excludes = [".git", ".env"]
+# - service.config.excludes = ["*.db"]
+# - Final excludes = [".git", ".env", "*.db"]

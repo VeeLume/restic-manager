@@ -1,0 +1,55 @@
+# Container test configuration
+[global]
+restic_password_file = "/root/restic_password"
+docker_base = "/backup-data"
+retention_daily = 2
+retention_weekly = 1
+retention_monthly = 1
+default_timeout_seconds = 300
+log_directory = "/var/log/restic-manager"
+
+[destinations.local]
+type = "local"
+url = "/backup-repo"
+description = "Local backup repository in container"
+
+[services.postgres]
+enabled = true
+description = "Test PostgreSQL database"
+schedule = "*/5 * * * *"  # Every 5 minutes for testing
+targets = ["local"]
+strategy = "generic"
+timeout_seconds = 600
+
+[services.postgres.config]
+paths = ["dumps"]
+volumes = []  # We'll backup the dump file only for this test
+
+# Pre-backup hook: Dump database
+[[services.postgres.config.pre_backup_hooks]]
+name = "Dump PostgreSQL database"
+command = "docker exec restic-test-db pg_dump -U testuser testdb > /backup-data/dumps/testdb.sql"
+working_dir = "/backup-data"
+timeout_seconds = 120
+continue_on_error = false
+
+# Pre-backup hook: Create metadata
+[[services.postgres.config.pre_backup_hooks]]
+name = "Create backup metadata"
+command = "date '+%Y-%m-%d %H:%M:%S' > /backup-data/dumps/metadata.txt"
+timeout_seconds = 10
+continue_on_error = true
+
+# Post-backup hook: Verify
+[[services.postgres.config.post_backup_hooks]]
+name = "Verify dump exists"
+command = "test -f /backup-data/dumps/testdb.sql && echo 'Dump verified' || exit 1"
+timeout_seconds = 10
+continue_on_error = false
+
+# Post-backup hook: Show stats
+[[services.postgres.config.post_backup_hooks]]
+name = "Show backup stats"
+command = "ls -lh /backup-data/dumps/ && du -sh /backup-repo"
+timeout_seconds = 10
+continue_on_error = true

@@ -1,1 +1,30 @@
+# Rust build artifacts
 /target
+Cargo.lock
+
+# Test files and artifacts
+test_password
+tests/integration/test-data/
+tests/integration/test-backup-repo/
+tests/integration/test-restore/
+tests/container/logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Backup files
+*.bak
+*~

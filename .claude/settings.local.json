@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo build:*)",
+      "Bash(dir:*)",
+      "Bash(cargo test:*)",
+      "Bash(.\\\\target\\\\release\\\\restic-manager.exe snapshots:*)",
+      "Bash(target/release/restic-manager.exe snapshots:*)",
+      "Bash(target/release/restic-manager.exe status:*)",
+      "Bash(target/release/restic-manager.exe verify:*)",
+      "Bash(target/release/restic-manager.exe restore:*)",
+      "WebFetch(domain:docs.immich.app)"
+    ]
+  }
+}
